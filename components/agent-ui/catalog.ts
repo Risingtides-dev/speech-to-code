@@ -1,8 +1,7 @@
-// Agent UI Catalog for json-render
-// Defines the component library available to the coding agent
+// Agent UI Catalog - Component Schema Definitions
+// These schemas define what props each UI component accepts
 
 import { z } from 'zod/v4';
-import { createCatalog } from '@json-render/core';
 
 // Schema definitions for each component
 export const ToolStatusSchema = z.object({
@@ -169,93 +168,67 @@ export const CollapsibleSchema = z.object({
   icon: z.string().optional(),
 });
 
-// Create the catalog with all components
-export const agentCatalog = createCatalog({
-  // Status & Progress
-  ToolStatus: {
-    schema: ToolStatusSchema,
-    description: 'Display tool execution status with timing',
-  },
-  ProgressBar: {
-    schema: ProgressBarSchema,
-    description: 'Show progress of long-running operations',
-  },
-  Spinner: {
-    schema: SpinnerSchema,
-    description: 'Loading indicator',
-  },
-  StepList: {
-    schema: StepListSchema,
-    description: 'Multi-step workflow progress',
-  },
+// Component type mapping for the catalog
+export const componentSchemas = {
+  ToolStatus: ToolStatusSchema,
+  ProgressBar: ProgressBarSchema,
+  Spinner: SpinnerSchema,
+  StepList: StepListSchema,
+  CodeBlock: CodeBlockSchema,
+  FileDiff: FileDiffSchema,
+  FileTree: FileTreeSchema,
+  Terminal: TerminalSchema,
+  DataTable: DataTableSchema,
+  MetricCard: MetricCardSchema,
+  ErrorCard: ErrorCardSchema,
+  SuccessCard: SuccessCardSchema,
+  ChoiceList: ChoiceListSchema,
+  InputPrompt: InputPromptSchema,
+  ConfirmDialog: ConfirmDialogSchema,
+  Stack: StackSchema,
+  Grid: GridSchema,
+  Card: CardSchema,
+  Collapsible: CollapsibleSchema,
+} as const;
 
-  // Code & Files
-  CodeBlock: {
-    schema: CodeBlockSchema,
-    description: 'Display code with syntax highlighting',
-  },
-  FileDiff: {
-    schema: FileDiffSchema,
-    description: 'Show before/after file changes',
-  },
-  FileTree: {
-    schema: FileTreeSchema,
-    description: 'Display file system structure',
-  },
-  Terminal: {
-    schema: TerminalSchema,
-    description: 'Terminal output display',
-  },
+export type ComponentType = keyof typeof componentSchemas;
 
-  // Data Display
-  DataTable: {
-    schema: DataTableSchema,
-    description: 'Tabular data display',
-  },
-  MetricCard: {
-    schema: MetricCardSchema,
-    description: 'Single metric with trend',
-  },
-  ErrorCard: {
-    schema: ErrorCardSchema,
-    description: 'Error message display',
-  },
-  SuccessCard: {
-    schema: SuccessCardSchema,
-    description: 'Success message display',
-  },
+// UI Spec format for streaming
+export interface UISpec {
+  component: ComponentType;
+  props: Record<string, unknown>;
+  children?: UISpec[];
+  id?: string;
+}
 
-  // Interactive
-  ChoiceList: {
-    schema: ChoiceListSchema,
-    description: 'Selection from options',
-  },
-  InputPrompt: {
-    schema: InputPromptSchema,
-    description: 'Request user text input',
-  },
-  ConfirmDialog: {
-    schema: ConfirmDialogSchema,
-    description: 'Confirmation prompt',
-  },
+// Validate a spec against its schema
+export function validateSpec(spec: UISpec): boolean {
+  const schema = componentSchemas[spec.component];
+  if (!schema) return false;
+  
+  const result = schema.safeParse(spec.props);
+  return result.success;
+}
 
-  // Layout
-  Stack: {
-    schema: StackSchema,
-    description: 'Vertical or horizontal stack',
-  },
-  Grid: {
-    schema: GridSchema,
-    description: 'Grid layout',
-  },
-  Card: {
-    schema: CardSchema,
-    description: 'Content card container',
-  },
-  Collapsible: {
-    schema: CollapsibleSchema,
-    description: 'Expandable section',
-  },
-});
-
-export type AgentCatalog = typeof agentCatalog;
+// Catalog metadata for AI prompts
+export const catalogMeta = {
+  ToolStatus: { description: 'Display tool execution status with timing' },
+  ProgressBar: { description: 'Show progress of long-running operations' },
+  Spinner: { description: 'Loading indicator' },
+  StepList: { description: 'Multi-step workflow progress' },
+  CodeBlock: { description: 'Display code with syntax highlighting' },
+  FileDiff: { description: 'Show before/after file changes' },
+  FileTree: { description: 'Display file system structure' },
+  Terminal: { description: 'Terminal output display' },
+  DataTable: { description: 'Tabular data display' },
+  MetricCard: { description: 'Single metric with trend' },
+  ErrorCard: { description: 'Error message display' },
+  SuccessCard: { description: 'Success message display' },
+  ChoiceList: { description: 'Selection from options' },
+  InputPrompt: { description: 'Request user text input' },
+  ConfirmDialog: { description: 'Confirmation prompt' },
+  Stack: { description: 'Vertical or horizontal stack layout' },
+  Grid: { description: 'Grid layout' },
+  Card: { description: 'Content card container' },
+  Collapsible: { description: 'Expandable section' },
+} as const;

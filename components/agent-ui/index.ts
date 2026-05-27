@@ -1,7 +1,7 @@
 // Agent UI components barrel export
-export { agentCatalog, type AgentCatalog } from './catalog';
+export { componentSchemas, catalogMeta, validateSpec, type UISpec, type ComponentType } from './catalog';
 export { componentRegistry } from './registry';
-export { AgentRenderer, StreamingRenderer } from './renderer';
+export { AgentRenderer } from './renderer';
 
 // Individual components
 export { ToolStatus } from './components/tool-status';
