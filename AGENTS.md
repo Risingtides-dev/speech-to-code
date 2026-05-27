@@ -6,6 +6,15 @@ This file provides guidance to AI coding agents (including Claude Code, claude.a
 
 A PWA that provides a **local voice layer for coding agents**. It connects a browser to the xAI Voice API (Leo voice, real-time WebSocket) for spoken interaction, and renders streaming "generative UI" driven by agent tool-call events. The app is bootstrapped/maintained via [v0](https://v0.app) — merges to `main` auto-deploy on Vercel, and v0 may push commits directly.
 
+### Where this sits in the stack (important)
+
+This app is **middleware**, not the agent itself:
+
+- **xAI / Grok Voice** is only the speech transport — STT (your voice → text) and TTS (agent text → Leo's voice). It is not the brain; it does not run tools.
+- **The agent runtime lives below this layer and will be the PI SDK (pi.dev).** When the agent harness is added, it talks to the PI SDK; this app connects to that harness over the event boundary described below — it does not embed the agent logic.
+
+So the data flow is: **user speech → xAI STT → (transcript routed to) PI SDK agent runtime → agent emits tool-call/UI events → this app renders them → agent text → xAI TTS → user hears Leo.** Keep voice (xAI) and reasoning/tool-execution (PI SDK) as separate concerns; this app is the glue and the UI.
+
 ## Commands
 
 Package manager is **pnpm** (a `pnpm-lock.yaml` is committed; do not introduce npm/yarn lockfiles).
@@ -26,7 +35,7 @@ There is **no test framework configured** — no `test` script, no test runner, 
 
 Create `.env.local`:
 - `XAI_API_KEY` — required for voice; used **server-side only** in `app/api/voice/session/route.ts` to mint ephemeral tokens. Never expose it to the client.
-- `AGENT_EVENT_URL` — optional. If set, `/api/events/stream` proxies this real agent SSE endpoint; if unset, it falls back to `lib/events/mock-events.ts` (demo mode).
+- `AGENT_EVENT_URL` — optional. If set, `/api/events/stream` proxies this real agent SSE endpoint; if unset, it falls back to `lib/events/mock-events.ts` (demo mode). **This is the integration point for the PI SDK (pi.dev) agent runtime** — the agent harness, once built, exposes the event stream here.
 
 ## Build gotchas
 
@@ -48,7 +57,7 @@ Real-time audio I/O with xAI Voice over WebSocket.
 Agent emits events; the client renders components from them.
 - `lib/events/event-types.ts` — the `AgentEvent` union (tool-call lifecycle, `text_delta`/`text_done`, `ui_render`/`ui_patch`) plus SSE parse/format helpers.
 - `lib/events/event-source.ts` — `AgentEventSource`, a fetch-based SSE reader (not the native `EventSource`).
-- `app/api/events/stream/route.ts` — SSE endpoint; proxies `AGENT_EVENT_URL` or streams mock events.
+- `app/api/events/stream/route.ts` — SSE endpoint; proxies `AGENT_EVENT_URL` (the PI SDK agent runtime, once wired in) or streams mock events. This is the seam where the PI SDK agent harness plugs in — the app consumes its event stream rather than running agent logic itself.
 - `components/agent-ui/renderer.tsx` — `AgentRenderer` takes the `AgentEvent[]`, derives streaming text, a tool-call status map, and `ui_render` specs, and renders them.
 - `components/agent-ui/registry.tsx` — `componentRegistry`: maps spec `type` strings → React components. The renderer looks up components here.
 - `components/agent-ui/catalog.ts` — Zod schemas (`componentSchemas`) + `catalogMeta` describing each component's props, intended for validation and for prompting the model.
