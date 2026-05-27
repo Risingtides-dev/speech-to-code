@@ -11,7 +11,7 @@ A PWA that provides a **local voice layer for coding agents**. It connects a bro
 This app is **middleware**, not the agent itself:
 
 - **xAI / Grok Voice** is only the speech transport — STT (your voice → text) and TTS (agent text → Leo's voice). It is not the brain; it does not run tools.
-- **The agent runtime is the project's own Rust harness ("Ocean" runtime).** This Next.js app does **not** embed the harness or agent logic — it connects to the Rust harness over the event boundary described below. (An earlier plan to use the PI SDK was dropped because it is a Node runtime; this project runs the agent in Rust instead.)
+- **The agent runtime is the project's own Rust harness ("Ocean" runtime), running as a local native process.** It executes tools natively (filesystem, shell, process spawning), which is why it stays a native binary rather than WASM-in-browser (sandboxed, no tool execution) or a JS/TS rewrite. This Next.js app does **not** embed the harness or agent logic — it connects to the local Rust process over the SSE event boundary described below. (An earlier plan to use the PI SDK was dropped because it is a Node runtime; this project runs the agent in Rust instead.)
 
 So the data flow is: **user speech → xAI STT → Rust (Ocean) harness / agent runtime → tool-call & UI events → this app renders them → agent text → xAI TTS → user hears Leo.** Keep voice (xAI) and reasoning/tool-execution (Rust harness) as separate concerns; this app is the glue and the UI.
 
