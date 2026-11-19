@@ -13,6 +13,8 @@ Lightweight pull-request checks for the event client and TypeScript source.
 - Keep credentials and runtime/provider calls out of source checks.
 - Use the committed pnpm lockfile and cancel superseded PR runs.
 - Vercel owns preview builds; this workflow does not deploy.
+- Vercel's separate Git integration deploys main merges to Production. A green
+  source job is not deployment authority; follow the root release boundary.
 
 ## Work Guidance
 

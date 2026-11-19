@@ -53,7 +53,10 @@ export class XAIVoiceClient {
   private turnState: VoiceTurnState = 'idle';
   private reconnectAttempts: number = 0;
   private reconnectTimeout: NodeJS.Timeout | null = null;
+  private refreshTimeout: NodeJS.Timeout | null = null;
   private heartbeatInterval: NodeJS.Timeout | null = null;
+  private tokenController: AbortController | null = null;
+  private connectionGeneration = 0;
   private ephemeralToken: string | null = null;
   
   private options: VoiceClientOptions;
@@ -97,43 +100,56 @@ export class XAIVoiceClient {
       return true;
     }
 
+    const generation = ++this.connectionGeneration;
+    this.cleanup();
+    const controller = new AbortController();
+    this.tokenController = controller;
+    const isCurrent = () => this.connectionGeneration === generation && !controller.signal.aborted;
     this.setConnectionState('connecting');
 
     try {
+      if (!isCurrent()) return false;
       // Get ephemeral token from our API
       const response = await fetch('/api/voice/session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
       });
+      if (!isCurrent()) return false;
 
       if (!response.ok) {
         throw new Error('Failed to get voice session token');
       }
 
       const { token, expires_at } = await response.json();
+      if (!isCurrent()) return false;
       this.ephemeralToken = token;
 
       // Schedule token refresh before expiry
-      const expiresIn = new Date(expires_at).getTime() - Date.now() - 5000;
-      setTimeout(() => this.refreshToken(), Math.max(0, expiresIn));
+      this.scheduleTokenRefresh(expires_at, generation);
 
       // Connect to xAI Voice WebSocket
-      this.ws = new WebSocket('wss://api.x.ai/v1/realtime');
-
-      this.ws.onopen = () => this.handleOpen();
-      this.ws.onmessage = (event) => this.handleMessage(event);
-      this.ws.onclose = (event) => this.handleClose(event);
-      this.ws.onerror = (event) => this.handleError(event);
+      const socket = new WebSocket('wss://api.x.ai/v1/realtime');
+      this.ws = socket;
+      const ownsSocket = () => isCurrent() && this.ws === socket;
+      socket.onopen = () => { if (ownsSocket()) this.handleOpen(); };
+      socket.onmessage = (event) => { if (ownsSocket()) this.handleMessage(event); };
+      socket.onclose = (event) => { if (ownsSocket()) this.handleClose(event); };
+      socket.onerror = (event) => { if (ownsSocket()) this.handleError(event); };
 
       // Resume audio context (for iOS)
       await this.audioPlayer.resumeContext();
 
-      return true;
+      return isCurrent();
     } catch (error) {
+      if (!isCurrent()) return false;
+      this.cleanup();
       const err = error instanceof Error ? error : new Error('Connection failed');
       this.setConnectionState('error');
-      this.options.onError?.(err);
+      if (this.connectionGeneration === generation) this.options.onError?.(err);
       return false;
+    } finally {
+      if (this.tokenController === controller) this.tokenController = null;
     }
   }
 
@@ -286,22 +302,45 @@ export class XAIVoiceClient {
 
     console.log(`[XAIVoice] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
 
+    const generation = this.connectionGeneration;
     this.reconnectTimeout = setTimeout(() => {
-      this.connect();
+      if (this.connectionGeneration !== generation) return;
+      this.reconnectTimeout = null;
+      if (this.connectionState === 'reconnecting') {
+        return this.connect();
+      }
     }, delay);
   }
 
-  private async refreshToken(): Promise<void> {
-    if (this.connectionState !== 'connected') return;
+  private scheduleTokenRefresh(expiresAt: string, generation: number): void {
+    if (this.refreshTimeout) clearTimeout(this.refreshTimeout);
+    const expiresIn = new Date(expiresAt).getTime() - Date.now() - 5000;
+    this.refreshTimeout = setTimeout(() => {
+      if (this.connectionGeneration !== generation) return;
+      this.refreshTimeout = null;
+      return this.refreshToken(generation);
+    }, Math.max(0, expiresIn));
+  }
+
+  private async refreshToken(generation: number): Promise<void> {
+    const socket = this.ws;
+    if (this.connectionGeneration !== generation || this.connectionState !== 'connected' || !socket) return;
+    const controller = new AbortController();
+    this.tokenController = controller;
+    const isCurrent = () => this.connectionGeneration === generation && this.ws === socket
+      && this.connectionState === 'connected' && !controller.signal.aborted;
 
     try {
       const response = await fetch('/api/voice/session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
       });
+      if (!isCurrent()) return;
 
       if (response.ok) {
         const { token, expires_at } = await response.json();
+        if (!isCurrent()) return;
         this.ephemeralToken = token;
         
         // Send updated token to session
@@ -311,11 +350,12 @@ export class XAIVoiceClient {
         });
 
         // Schedule next refresh
-        const expiresIn = new Date(expires_at).getTime() - Date.now() - 5000;
-        setTimeout(() => this.refreshToken(), Math.max(0, expiresIn));
+        this.scheduleTokenRefresh(expires_at, generation);
       }
     } catch (error) {
-      console.error('[XAIVoice] Failed to refresh token:', error);
+      if (isCurrent()) console.error('[XAIVoice] Failed to refresh token:', error);
+    } finally {
+      if (this.tokenController === controller) this.tokenController = null;
     }
   }
 
@@ -376,6 +416,12 @@ export class XAIVoiceClient {
   }
 
   private cleanup(): void {
+    this.tokenController?.abort();
+    this.tokenController = null;
+    if (this.refreshTimeout) {
+      clearTimeout(this.refreshTimeout);
+      this.refreshTimeout = null;
+    }
     if (this.heartbeatInterval) {
       clearInterval(this.heartbeatInterval);
       this.heartbeatInterval = null;
@@ -386,14 +432,18 @@ export class XAIVoiceClient {
       this.reconnectTimeout = null;
     }
 
+    const socket = this.ws;
     this.ws = null;
+    this.ephemeralToken = null;
+    if (socket && socket.readyState < WebSocket.CLOSING) socket.close(1000, 'Connection retired');
   }
 
   disconnect(): void {
-    if (this.ws) {
-      this.ws.close(1000, 'User disconnect');
-      this.cleanup();
-    }
+    this.connectionGeneration += 1;
+    this.cleanup();
+    this.audioProcessor?.stopRecording();
+    this.audioPlayer.stop();
+    this.setTurnState('idle');
     this.setConnectionState('disconnected');
   }
 
