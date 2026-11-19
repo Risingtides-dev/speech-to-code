@@ -12,6 +12,10 @@ do not establish the currently deployed revision or a live Ocean connection.
 - `lib/voice/` owns the xAI WebSocket client, microphone processing, audio
   playback, reconnect/session handling, and shared `TIMING_CONFIG` constants.
 - `components/voice/` owns the React voice context and controls.
+- Voice connection generations fence token requests, socket callbacks and queued
+  reconnect/refresh work. Disconnect retires all transport timers, stops recording
+  and playback, and prevents late work from reopening a session. Real microphone
+  and provider behavior still require separately authorized runtime verification.
 - `lib/events/event-types.ts` owns consumed events and the `{type, props,
   children}` UI spec; `event-source.ts` owns the fetch-based SSE reader.
 - The page owns one event source and disconnects it on replacement/unmount.
@@ -37,6 +41,9 @@ do not establish the currently deployed revision or a live Ocean connection.
 - Keep provider calls, microphone access, tunnel changes and runtime deployment
   separate from local source checks. `scripts/tunnel.sh` and `tunnel-stop.sh`
   change Tailscale state; do not run them as build verification.
+- The Vercel Git integration automatically deploys a main merge to Production.
+  Treat merging as a production release and require separate deployment authority. Source PRs,
+  local checks and preview builds do not establish live voice acceptance.
 - Use pnpm and preserve `pnpm-lock.yaml`; do not add npm/yarn lockfiles.
 - Client audio/rendering/providers need `'use client'`; keep credentials in server
   routes. `@/*` resolves from the repository root.
@@ -75,6 +82,6 @@ do not establish the currently deployed revision or a live Ocean connection.
 
 ## Child devlog Index
 
-- `tests/` — event-client regression fixtures; governed by `tests/AGENTS.md`.
+- `tests/` — stream/voice lifecycle fixtures; governed by `tests/AGENTS.md`.
 - `.github/` — source-check workflow; governed by `.github/AGENTS.md`.
 - This root owns application source, scripts and design notes.
