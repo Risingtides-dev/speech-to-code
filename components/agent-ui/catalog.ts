@@ -86,7 +86,7 @@ export const ColumnSchema = z.object({
 
 export const DataTableSchema = z.object({
   columns: z.array(ColumnSchema),
-  rows: z.array(z.record(z.unknown())),
+  rows: z.array(z.record(z.string(), z.unknown())),
   sortable: z.boolean().optional(),
 });
 

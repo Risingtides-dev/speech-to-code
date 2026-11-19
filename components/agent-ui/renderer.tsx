@@ -15,7 +15,7 @@ interface AgentRendererProps {
 }
 
 // Render a single UI spec using the component registry
-function RenderSpec({ spec }: { spec: EventUISpec }): JSX.Element | null {
+function RenderSpec({ spec }: { spec: EventUISpec }): React.JSX.Element | null {
   const Component = componentRegistry[spec.type];
   
   if (!Component) {
