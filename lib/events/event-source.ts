@@ -10,8 +10,14 @@ interface EventSourceOptions {
   onError?: (error: Error) => void;
 }
 
+interface EventConnection {
+  controller: AbortController;
+  body: ReadableStream<Uint8Array> | null;
+  reader: ReadableStreamDefaultReader<Uint8Array> | null;
+}
+
 export class AgentEventSource {
-  private abortController: AbortController | null = null;
+  private connection: EventConnection | null = null;
   private state: EventSourceState = 'closed';
   private options: EventSourceOptions;
 
@@ -24,34 +30,43 @@ export class AgentEventSource {
       return;
     }
 
-    this.abortController = new AbortController();
+    const connection: EventConnection = {
+      controller: new AbortController(), body: null, reader: null,
+    };
+    this.connection = connection;
+    const isCurrent = () => this.connection === connection && !connection.controller.signal.aborted;
     this.setState('connecting');
 
     try {
+      if (!isCurrent()) return;
       const response = await fetch(url, {
-        signal: this.abortController.signal,
+        signal: connection.controller.signal,
         headers: {
           'Accept': 'text/event-stream',
           'Cache-Control': 'no-cache',
         },
       });
+      connection.body = response.body;
+      if (!isCurrent()) return;
 
       if (!response.ok) {
         throw new Error(`SSE connection failed: ${response.status}`);
       }
 
-      this.setState('open');
-
       const reader = response.body?.getReader();
       if (!reader) {
         throw new Error('No response body');
       }
+      connection.reader = reader;
+      this.setState('open');
+      if (!isCurrent()) return;
 
       const decoder = new TextDecoder();
       let buffer = '';
 
       while (true) {
         const { done, value } = await reader.read();
+        if (!isCurrent()) return;
         
         if (done) {
           this.setState('closed');
@@ -63,6 +78,7 @@ export class AgentEventSource {
         buffer = lines.pop() || '';
 
         for (const line of lines) {
+          if (!isCurrent()) return;
           const trimmed = line.trim();
           if (!trimmed || trimmed.startsWith(':')) continue;
 
@@ -78,20 +94,41 @@ export class AgentEventSource {
         }
       }
     } catch (error) {
+      if (!isCurrent()) return;
       if ((error as Error).name === 'AbortError') {
         this.setState('closed');
         return;
       }
 
       this.setState('error');
-      this.options.onError?.(error instanceof Error ? error : new Error('Unknown error'));
+      if (isCurrent()) {
+        this.options.onError?.(error instanceof Error ? error : new Error('Unknown error'));
+      }
+    } finally {
+      if (this.connection === connection) this.connection = null;
+      // DONE, EOF, failure and supersession all retire this connection's resources.
+      if (connection.reader) {
+        try {
+          await connection.reader.cancel();
+        } catch { /* cancellation is best effort after an errored stream */ }
+        connection.reader.releaseLock();
+      } else if (connection.body && !connection.body.locked) {
+        await connection.body.cancel().catch(() => {});
+      }
     }
   }
 
   disconnect(): void {
-    if (this.abortController) {
-      this.abortController.abort();
-      this.abortController = null;
+    const connection = this.connection;
+    // Revoke ownership before aborting: an old continuation cannot close a new one.
+    this.connection = null;
+    if (connection) {
+      connection.controller.abort();
+      if (connection.reader) {
+        void connection.reader.cancel().catch(() => {});
+      } else if (connection.body && !connection.body.locked) {
+        void connection.body.cancel().catch(() => {});
+      }
     }
     this.setState('closed');
   }

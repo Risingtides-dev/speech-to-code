@@ -14,6 +14,9 @@ do not establish the currently deployed revision or a live Ocean connection.
 - `components/voice/` owns the React voice context and controls.
 - `lib/events/event-types.ts` owns consumed events and the `{type, props,
   children}` UI spec; `event-source.ts` owns the fetch-based SSE reader.
+- The page owns one event source and disconnects it on replacement/unmount.
+  A connection owns its controller and reader; stale completions never emit
+  events or change a replacement's state. DONE, EOF and errors release readers.
 - `app/api/events/stream/route.ts` proxies GET events and POST commands to
   `AGENT_EVENT_URL`. GET falls back to mock events when unset or upstream fails;
   POST returns 503 when unset. Mock output does not prove a live agent connection.
@@ -56,11 +59,22 @@ do not establish the currently deployed revision or a live Ocean connection.
 - `pnpm typecheck` runs the compiler without emit or incremental state.
 - `pnpm build` runs the production Next build, including TypeScript validation;
   `pnpm dev` and `pnpm start` run development and production servers respectively.
-- No test runner or test script is configured. Do not report nonexistent tests.
+- `pnpm test` runs Node's built-in event-client regressions. They compile the
+  client with the existing TypeScript dependency and use mocked fetch/streams;
+  no provider or backend connection is made. PR source checks run tests and
+  type checking; Vercel owns preview builds.
 - `pnpm lint` currently invokes an absent ESLint dependency/configuration; it is
   not a working gate. Type checking does not substitute for lint or live voice proof.
 - `git diff --check` checks patch whitespace. Review docs against current source.
+- `scripts/browser_event_source_smoke.js` is an optional Playwright CLI fixture
+  for the built app on `127.0.0.1:18765`. Run it with `playwright-cli --session
+  speech-smoke run-code --filename scripts/browser_event_source_smoke.js`.
+  It mocks permission and event transport, blocks backend/external requests,
+  checks demo replacement and reader release, and exposes `window.__eventSourceProof`.
+  It never opens a microphone or provider session.
 
 ## Child devlog Index
 
-- No child devlogs. This root owns all source, scripts and design notes.
+- `tests/` — event-client regression fixtures; governed by `tests/AGENTS.md`.
+- `.github/` — source-check workflow; governed by `.github/AGENTS.md`.
+- This root owns application source, scripts and design notes.

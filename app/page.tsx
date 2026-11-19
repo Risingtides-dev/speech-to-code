@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { VoiceProvider, VoiceControls, PermissionPrompt, useVoice } from '@/components/voice';
 import { AgentRenderer } from '@/components/agent-ui';
 import { AgentEventSource } from '@/lib/events/event-source';
@@ -13,33 +13,44 @@ export default function VoiceAgentPage() {
   const [hasPermission, setHasPermission] = useState(false);
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
+  const eventSourceRef = useRef<AgentEventSource | null>(null);
+
+  useEffect(() => () => {
+    const source = eventSourceRef.current;
+    eventSourceRef.current = null;
+    source?.disconnect();
+  }, []);
 
   const handleToolCall = useCallback((toolName: string, args: unknown) => {
     console.log('[VoiceAgent] Tool call from voice:', toolName, args);
   }, []);
 
   const handleDemoMode = useCallback(() => {
+    const previous = eventSourceRef.current;
+    eventSourceRef.current = null;
+    previous?.disconnect();
     setEvents([]);
     setIsStreaming(true);
 
     const eventSource = new AgentEventSource({
       onEvent: (event) => {
+        if (eventSourceRef.current !== eventSource) return;
         setEvents(prev => [...prev, event]);
       },
       onStateChange: (state) => {
-        if (state === 'closed') {
+        if (eventSourceRef.current === eventSource && (state === 'closed' || state === 'error')) {
           setIsStreaming(false);
         }
       },
       onError: (err) => {
+        if (eventSourceRef.current !== eventSource) return;
         console.error('[VoiceAgent] Event stream error:', err);
         setIsStreaming(false);
       },
     });
 
-    eventSource.connect('/api/events/stream');
-
-    return () => eventSource.disconnect();
+    eventSourceRef.current = eventSource;
+    void eventSource.connect('/api/events/stream');
   }, []);
 
   return (
