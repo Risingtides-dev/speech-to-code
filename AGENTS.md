@@ -1,76 +1,66 @@
-# AGENTS.md
+# speech-to-code — agent contract
 
-This file provides guidance to AI coding agents (including Claude Code, claude.ai/code) when working with code in this repository.
+## Purpose
 
-## What this is
+A Next.js PWA for xAI voice interaction and streamed agent UI. The checked-in app
+has separate voice and event-rendering paths. It does not embed a native agent
+runtime. README.md describes the v0/Vercel deployment connection; source checks
+do not establish the currently deployed revision or a live Ocean connection.
 
-A PWA that provides a **local voice layer for coding agents**. It connects a browser to the xAI Voice API (Leo voice, real-time WebSocket) for spoken interaction, and renders streaming "generative UI" driven by agent tool-call events. The app is bootstrapped/maintained via [v0](https://v0.app) — merges to `main` auto-deploy on Vercel, and v0 may push commits directly.
+## Ownership
 
-### Where this sits in the stack (important)
+- `lib/voice/` owns the xAI WebSocket client, microphone processing, audio
+  playback, reconnect/session handling, and shared `TIMING_CONFIG` constants.
+- `components/voice/` owns the React voice context and controls.
+- `lib/events/event-types.ts` owns consumed events and the `{type, props,
+  children}` UI spec; `event-source.ts` owns the fetch-based SSE reader.
+- `app/api/events/stream/route.ts` proxies GET events and POST commands to
+  `AGENT_EVENT_URL`. GET falls back to mock events when unset or upstream fails;
+  POST returns 503 when unset. Mock output does not prove a live agent connection.
+- `components/agent-ui/renderer.tsx` and `registry.tsx` own actual rendering;
+  `catalog.ts` owns Zod schemas and metadata. Its separate
+  `{component, props, children, id}` spec is not the event renderer's shape.
+- `components/ui/` owns reusable shadcn primitives; `public/` owns the service
+  worker, manifest, and microphone worklet. `VOICE_AGENT_README.md` has design notes.
+- `events.md` is the append-only repository history; this file owns current rules.
 
-This app is **middleware**, not the agent itself:
+## Local Contracts
 
-- **xAI / Grok Voice** is only the speech transport — STT (your voice → text) and TTS (agent text → Leo's voice). It is not the brain; it does not run tools.
-- **The agent runtime is the project's own Rust harness ("Ocean" runtime), running as a local native process.** It executes tools natively (filesystem, shell, process spawning), which is why it stays a native binary rather than WASM-in-browser (sandboxed, no tool execution) or a JS/TS rewrite. This Next.js app does **not** embed the harness or agent logic — it connects to the local Rust process over the SSE event boundary described below. (An earlier plan to use the PI SDK was dropped because it is a Node runtime; this project runs the agent in Rust instead.)
+- Keep `XAI_API_KEY` server-side in `/api/voice/session`; only ephemeral credentials
+  go to the browser. The current voice is `leo` at `wss://api.x.ai/v1/realtime`.
+- An external runtime, including a future Ocean integration, must use the existing
+  event/command boundary. The current page's voice tool-call callback only logs;
+  it does not dispatch tools to a native runtime.
+- Keep provider calls, microphone access, tunnel changes and runtime deployment
+  separate from local source checks. `scripts/tunnel.sh` and `tunnel-stop.sh`
+  change Tailscale state; do not run them as build verification.
+- Use pnpm and preserve `pnpm-lock.yaml`; do not add npm/yarn lockfiles.
+- Client audio/rendering/providers need `'use client'`; keep credentials in server
+  routes. `@/*` resolves from the repository root.
+- Reuse existing UI primitives. Keep controls compact; no emojis, sparkle icons,
+  marketing copy, or explanatory button strips in UI.
 
-So the data flow is: **user speech → xAI STT → Rust (Ocean) harness / agent runtime → tool-call & UI events → this app renders them → agent text → xAI TTS → user hears Leo.** Keep voice (xAI) and reasoning/tool-execution (Rust harness) as separate concerns; this app is the glue and the UI.
+## Work Guidance
 
-## Commands
+- Add generative UI components to `catalog.ts` and `registry.tsx`, with nontrivial
+  implementations under `components/agent-ui/components/`.
+- The runtime renderer is hand-written and does not import `@json-render/*`, even
+  though those packages are dependencies. Follow the event-types spec at that seam.
+- Preserve iOS gesture-driven AudioContext resume and mobile PWA constraints in
+  `VOICE_AGENT_README.md`. Service-worker registration is production-only.
+- Do not disable TypeScript build validation to bypass compiler failures.
 
-Package manager is **pnpm** (a `pnpm-lock.yaml` is committed; do not introduce npm/yarn lockfiles).
+## Verification
 
-```bash
-pnpm install
-pnpm dev      # next dev — http://localhost:3000
-pnpm build    # next build
-pnpm start    # serve production build
-pnpm lint     # eslint .
-```
+- `pnpm install --frozen-lockfile` installs the existing dependency graph.
+- `pnpm typecheck` runs the compiler without emit or incremental state.
+- `pnpm build` runs the production Next build, including TypeScript validation;
+  `pnpm dev` and `pnpm start` run development and production servers respectively.
+- No test runner or test script is configured. Do not report nonexistent tests.
+- `pnpm lint` currently invokes an absent ESLint dependency/configuration; it is
+  not a working gate. Type checking does not substitute for lint or live voice proof.
+- `git diff --check` checks patch whitespace. Review docs against current source.
 
-There is **no test framework configured** — no `test` script, no test runner, no test files. Don't claim tests pass; verify changes by running the app.
+## Child devlog Index
 
-`./scripts/tunnel.sh [port]` / `./scripts/tunnel-stop.sh` expose the local dev server over a Tailscale HTTPS tunnel (optionally Funnel for public access), used to reach the PWA from a phone.
-
-## Environment variables
-
-Create `.env.local`:
-- `XAI_API_KEY` — required for voice; used **server-side only** in `app/api/voice/session/route.ts` to mint ephemeral tokens. Never expose it to the client.
-- `AGENT_EVENT_URL` — optional. If set, `/api/events/stream` proxies this real agent SSE endpoint; if unset, it falls back to `lib/events/mock-events.ts` (demo mode). **This is the integration point for the Rust (Ocean) agent harness** — the harness exposes its event stream here.
-
-## Build gotchas
-
-`next.config.mjs` sets `typescript.ignoreBuildErrors: true` and `images.unoptimized: true`. **`pnpm build` will NOT catch type errors** — run `pnpm lint` and reason about types manually. TypeScript is otherwise `strict`. Path alias `@/*` maps to the repo root (e.g. `@/components`, `@/lib`).
-
-## Architecture
-
-Two largely independent subsystems feed the single page at `app/page.tsx` (wrapped in `VoiceProvider`):
-
-### 1. Voice layer (`lib/voice/`, `components/voice/`)
-Real-time audio I/O with xAI Voice over WebSocket.
-- `lib/voice/xai-client.ts` — `XAIVoiceClient`, the core. Fetches an ephemeral token from `/api/voice/session`, opens `wss://api.x.ai/v1/realtime`, sends a session config (server VAD, `pcm16`), and dispatches inbound message types (`response.audio.delta`, transcripts, `response.function_call_arguments.done` → `onToolCall`, etc.). Handles heartbeat, exponential-backoff reconnect, and token refresh.
-- `lib/voice/audio-processor.ts` — mic capture via `getUserMedia` + AudioWorklet (`/public/worklet/audio-processor.js`), emits base64 PCM16 chunks.
-- `lib/voice/audio-player.ts` — buffered low-latency playback with ducking.
-- `lib/voice/timing.ts` — `TIMING_CONFIG`: all buffer/VAD/reconnect/sample-rate constants live here. Tune audio behavior here, not inline.
-- `components/voice/voice-provider.tsx` — React context (`useVoice()`) that owns a `XAIVoiceClient` ref and surfaces state + actions (`connect`, `startListening`, `interrupt`, `sendText`).
-
-### 2. Generative UI layer (`lib/events/`, `components/agent-ui/`)
-Agent emits events; the client renders components from them.
-- `lib/events/event-types.ts` — the `AgentEvent` union (tool-call lifecycle, `text_delta`/`text_done`, `ui_render`/`ui_patch`) plus SSE parse/format helpers.
-- `lib/events/event-source.ts` — `AgentEventSource`, a fetch-based SSE reader (not the native `EventSource`).
-- `app/api/events/stream/route.ts` — SSE endpoint; proxies `AGENT_EVENT_URL` (the Rust/Ocean agent harness, once wired in) or streams mock events. This is the seam where the harness plugs in — the app consumes its event stream rather than running agent logic itself.
-- `components/agent-ui/renderer.tsx` — `AgentRenderer` takes the `AgentEvent[]`, derives streaming text, a tool-call status map, and `ui_render` specs, and renders them.
-- `components/agent-ui/registry.tsx` — `componentRegistry`: maps spec `type` strings → React components. The renderer looks up components here.
-- `components/agent-ui/catalog.ts` — Zod schemas (`componentSchemas`) + `catalogMeta` describing each component's props, intended for validation and for prompting the model.
-
-### Adding a generative-UI component
-Touch all three: add a Zod schema to `catalog.ts`, register the component in `registry.tsx`, and (for non-trivial ones) add the implementation under `components/agent-ui/components/`.
-
-## Conventions & sharp edges
-
-- **Two divergent `UISpec` shapes exist.** `lib/events/event-types.ts` defines `{ type, props, children }` — this is what `AgentRenderer`/`registry` actually consume. `components/agent-ui/catalog.ts` defines a different `{ component, props, children, id }` plus `validateSpec`. They are not unified; when wiring events to rendering, follow the **event-types** shape.
-- **The `@json-render/*` packages are dependencies but the runtime renderer is hand-rolled** in `renderer.tsx`/`registry.tsx`. Comments mention "json-render" but the actual rendering does not import those packages — don't assume json-render runtime behavior.
-- **UI primitives** live in `components/ui/` (shadcn/ui, "new-york" style, ~57 components). Reuse them; import via `@/components/ui/*`. App is dark-mode-first (`<html className="dark">`).
-- **PWA**: `app/layout.tsx` registers a service worker (`/public/sw.js`, production only) and references `/public/manifest.json`. Mobile constraints matter — see `VOICE_AGENT_README.md` (iOS AudioContext resume on gesture, Android wake lock, 44px touch targets, viewport zoom disabled).
-- Client components (voice, renderer, providers) need `'use client'`; API routes and server logic must keep `XAI_API_KEY` server-side.
-
-See `VOICE_AGENT_README.md` for the deeper voice/PWA design notes and the agent-event integration contract.
+- No child devlogs. This root owns all source, scripts and design notes.
